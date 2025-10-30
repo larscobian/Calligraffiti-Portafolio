@@ -56,15 +56,15 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ category, onAddImages, onIm
   };
 
   return (
-    <section aria-labelledby={`gallery-title-${category.id}`}>
-      <div className="flex justify-between items-center mb-2">
-        <h2 id={`gallery-title-${category.id}`} className="text-3xl font-bold bg-gradient-to-r from-purple-500 to-purple-400 bg-clip-text text-transparent tracking-wide">
+    <section aria-labelledby={`gallery-title-${category.id}`} className="mb-10">
+      <div className="relative text-center mb-2">
+        <h2 id={`gallery-title-${category.id}`} className="text-3xl font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 bg-clip-text text-transparent tracking-wide inline-block">
           {category.title}
         </h2>
         {isEditMode && (
           <button
             onClick={onAddImages}
-            className="flex items-center justify-center p-2 bg-purple-600 text-white font-semibold rounded-full hover:bg-purple-500 transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-purple-500"
+            className="absolute top-1/2 -translate-y-1/2 right-0 flex items-center justify-center p-2 bg-purple-600 text-white font-semibold rounded-full hover:bg-purple-500 transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-purple-500"
             aria-label={`Añadir fotos a ${category.title}`}
           >
             <UploadIcon />

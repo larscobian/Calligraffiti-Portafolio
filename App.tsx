@@ -17,7 +17,7 @@ declare global {
 }
 
 const DISCOVERY_DOCS = ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"];
-const SCOPES = "https://www.googleapis.com/auth/drive.readonly"; // Readonly is enough for fetching
+const SCOPES = "https://www.googleapis.com/auth/drive"; // Full scope to allow reading and uploading
 const ROOT_FOLDER_NAME = "Calligraffiti Portafolio";
 
 const App: React.FC = () => {
@@ -42,13 +42,13 @@ const App: React.FC = () => {
       try {
         const response = await fetch('/portfolio-data.json');
         if (!response.ok) {
-          throw new Error('Could not load portfolio data. Entering setup mode.');
+          throw new Error('Could not load portfolio data.');
         }
         const data: Category[] = await response.json();
         setCategories(data);
       } catch (error) {
-        console.warn(error);
-        setIsEditMode(true); 
+        console.warn("Could not load portfolio-data.json. The app will start with an empty catalog in public mode. Click 'Administrar' to set it up.", error);
+        setCategories([]); // Show empty public catalog, don't force admin mode
       } finally {
         setIsLoading(false);
         setLoadingMessage('');
@@ -104,6 +104,7 @@ const App: React.FC = () => {
       const categoriesResponse = await window.gapi.client.drive.files.list({
         q: `'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
         fields: 'files(id, name)',
+        orderBy: 'name', // Ensure consistent category order
       });
 
       const categoryFolders = categoriesResponse.result.files || [];
@@ -147,7 +148,6 @@ const handleExportData = async () => {
     setLoadingMessage('Iniciando exportación...');
 
     try {
-        // FIX: JSZip is loaded on the window object, so we need to instantiate it from there.
         const zip = new window.JSZip();
         const newPublicData = [];
         const slugify = (text: string) => text.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/--+/g, '-');
@@ -263,12 +263,11 @@ const handleExportData = async () => {
   };
 
   const showImagePicker = async (categoryId: string) => {
-    if (!apiConfig || isInitializing || !isSignedIn) return;
+    if (!apiConfig || isInitializing || !isSignedIn || !window.google?.picker) return;
     const picker = new window.google.picker.PickerBuilder()
       .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED)
-      .setAppId(apiConfig.clientId.split('-')[0]) 
       .setOAuthToken(window.gapi.client.token.access_token)
-      .addView(new window.google.picker.View(window.google.picker.ViewId.PHOTOS).setMimeTypes("image/jpeg,image/png,image/gif"))
+      .addView(new window.google.picker.View(window.google.picker.ViewId.PHOTOS).setMimeTypes("image/jpeg,image/png,image/gif,image/webp"))
       .addView(new window.google.picker.DocsUploadView().setParent(categoryId))
       .setDeveloperKey(apiConfig.apiKey)
       .setCallback((data: any) => {
@@ -424,7 +423,7 @@ const handleExportData = async () => {
     }
 
     return (
-       <div className="space-y-4 w-full">
+       <div className="w-full">
           {categories.map(category => (
             <ImageGallery
               key={category.id}
@@ -444,7 +443,7 @@ const handleExportData = async () => {
     <div className="min-h-screen bg-gray-900 text-gray-200 font-sans flex flex-col">
        <header className="py-6 px-4 sm:px-6 lg:px-8">
         <div className="container mx-auto text-center relative">
-          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-purple-500 to-amber-400 bg-clip-text text-transparent">
+          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-fuchsia-500 to-violet-600 bg-clip-text text-transparent">
             Calligraffiti Studio Catalog
           </h1>
           <p className="mt-2 text-lg text-gray-400">
