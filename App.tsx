@@ -20,6 +20,61 @@ const DISCOVERY_DOCS = ["https://www.googleapis.com/discovery/v1/apis/drive/v3/r
 const SCOPES = "https://www.googleapis.com/auth/drive"; // Full scope to allow reading and uploading
 const ROOT_FOLDER_NAME = "Calligraffiti Portafolio";
 
+async function applyTransformations(
+    imageBlob: Blob, 
+    rotation: number = 0, 
+    crop: { x: number; y: number; width: number; height: number; } | undefined,
+    mimeType: string = 'image/jpeg'
+): Promise<Blob> {
+    const img = await createImageBitmap(imageBlob);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    if (!ctx) throw new Error('Could not get canvas context');
+
+    const rads = rotation * Math.PI / 180;
+    const cos = Math.cos(rads);
+    const sin = Math.sin(rads);
+
+    const cropRect = crop ? {
+        x: img.width * (crop.x / 100),
+        y: img.height * (crop.y / 100),
+        width: img.width * (crop.width / 100),
+        height: img.height * (crop.height / 100),
+    } : { x: 0, y: 0, width: img.width, height: img.height };
+
+    const rotatedCropWidth = Math.abs(cropRect.width * cos) + Math.abs(cropRect.height * sin);
+    const rotatedCropHeight = Math.abs(cropRect.width * sin) + Math.abs(cropRect.height * cos);
+
+    canvas.width = rotatedCropWidth;
+    canvas.height = rotatedCropHeight;
+
+    ctx.translate(rotatedCropWidth / 2, rotatedCropHeight / 2);
+    ctx.rotate(rads);
+    
+    ctx.drawImage(
+        img,
+        cropRect.x,
+        cropRect.y,
+        cropRect.width,
+        cropRect.height,
+        -cropRect.width / 2,
+        -cropRect.height / 2,
+        cropRect.width,
+        cropRect.height
+    );
+
+    return new Promise((resolve, reject) => {
+        canvas.toBlob(blob => {
+            if (blob) {
+                resolve(blob);
+            } else {
+                reject(new Error('Canvas to Blob conversion failed'));
+            }
+        }, mimeType, 0.95);
+    });
+}
+
 const App: React.FC = () => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [apiConfig, setApiConfig] = useState<{apiKey: string, clientId: string} | null>(null);
@@ -152,7 +207,7 @@ const handleExportData = async () => {
     try {
         const zip = new window.JSZip();
         const newPublicData = [];
-        const slugify = (text: string) => text.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/--+/g, '-');
+        const slugify = (text: string) => text.toLowerCase().replace(/[\s/]+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/--+/g, '-');
 
         for (const category of categories) {
             setLoadingMessage(`Procesando categoría: ${category.title}`);
@@ -163,9 +218,10 @@ const handleExportData = async () => {
                 try {
                     const metaResponse = await window.gapi.client.drive.files.get({
                         fileId: image.id,
-                        fields: 'name'
+                        fields: 'name, mimeType'
                     });
                     const originalName = metaResponse.result.name;
+                    const mimeType = metaResponse.result.mimeType || 'image/jpeg';
                     const extension = originalName.split('.').pop() || 'jpg';
                     const sanitizedImageName = `${slugify(originalName.replace(/\.[^/.]+$/, ""))}-${image.id.slice(0, 6)}.${extension}`;
                     
@@ -176,11 +232,20 @@ const handleExportData = async () => {
                     });
 
                     const imagePath = `public/images/${sanitizedCategoryTitle}/${sanitizedImageName}`;
-                    zip.file(imagePath, imageResponse.body, { binary: true });
+                    
+                    if (image.rotation || image.crop) {
+                        setLoadingMessage(`Aplicando ediciones a: ${originalName}`);
+                        const imageBlob = new Blob([imageResponse.body], { type: mimeType });
+                        const processedBlob = await applyTransformations(imageBlob, image.rotation, image.crop, mimeType);
+                        zip.file(imagePath, processedBlob);
+                    } else {
+                        zip.file(imagePath, imageResponse.body, { binary: true });
+                    }
                     
                     newImages.push({
-                        ...image,
-                        src: `/images/${sanitizedCategoryTitle}/${sanitizedImageName}`
+                        id: image.id,
+                        src: `/images/${sanitizedCategoryTitle}/${sanitizedImageName}`,
+                        alt: image.alt,
                     });
 
                 } catch (imgErr: any) {

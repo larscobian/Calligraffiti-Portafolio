@@ -1,4 +1,5 @@
 
+
 import { Category } from './types';
 
 export const INITIAL_CATEGORIES: Category[] = [
@@ -25,7 +26,7 @@ export const INITIAL_CATEGORIES: Category[] = [
   },
   {
     id: 'details',
-    title: 'Puertas, Espejos y Detalles',
+    title: 'Detalles / Puertas / Espejos',
     images: [
       { id: 'd1', src: 'https://picsum.photos/seed/detail1/600/800', alt: 'Calligraffiti on a studio door' },
       { id: 'd2', src: 'https://picsum.photos/seed/detail2/600/800', alt: 'Etched mirror with calligraffiti' },
@@ -35,18 +36,12 @@ export const INITIAL_CATEGORIES: Category[] = [
     ],
   },
   {
-    id: 'paintings',
-    title: 'Cuadros',
+    id: 'paintings-clocks',
+    title: 'Cuadros y Relojes',
     images: [
       { id: 'p1', src: 'https://picsum.photos/seed/painting1/600/800', alt: 'Framed calligraffiti artwork' },
       { id: 'p2', src: 'https://picsum.photos/seed/painting2/600/800', alt: 'Canvas with calligraffiti' },
       { id: 'p3', src: 'https://picsum.photos/seed/painting3/600/800', alt: 'Set of framed pieces' },
-    ],
-  },
-  {
-    id: 'clocks',
-    title: 'Relojes',
-    images: [
       { id: 'c1', src: 'https://picsum.photos/seed/clock1/600/800', alt: 'Custom calligraffiti wall clock' },
       { id: 'c2', src: 'https://picsum.photos/seed/clock2/600/800', alt: 'Artistic clock design' },
     ],
