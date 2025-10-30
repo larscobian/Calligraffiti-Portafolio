@@ -86,14 +86,18 @@ const App: React.FC = () => {
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState('Cargando catálogo...');
-  const [isEditMode, setIsEditMode] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(() => localStorage.getItem('editMode') === 'true');
 
   const [modalState, setModalState] = useState<{ image: Image; gallery: Image[] } | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState<{ categoryId: string; imageId: string; } | null>(null);
   const [editingImage, setEditingImage] = useState<{category: Category, image: Image} | null>(null);
   
   useEffect(() => {
+    if (isEditMode) return; // Don't load static data in edit mode
+    
     const loadStaticData = async () => {
+      setIsLoading(true);
+      setLoadingMessage('Cargando catálogo...');
       try {
         const response = await fetch('/portfolio-data.json');
         if (!response.ok) {
@@ -102,19 +106,22 @@ const App: React.FC = () => {
         const data: Category[] = await response.json();
         setCategories(data);
       } catch (error) {
-        console.warn("Could not load portfolio-data.json. The app will start with an empty catalog in public mode. Click 'Administrar' to set it up.", error);
-        setCategories([]); // Show empty public catalog, don't force admin mode
+        console.warn("Could not load portfolio-data.json.", error);
+        setCategories([]);
       } finally {
         setIsLoading(false);
         setLoadingMessage('');
       }
     };
     loadStaticData();
-  }, []);
+  }, [isEditMode]);
 
 
   useEffect(() => {
-    if (!isEditMode) return;
+    if (!isEditMode) {
+      setIsInitializing(false);
+      return;
+    };
     
     const savedConfig = localStorage.getItem('googleApiConfig');
     if (savedConfig) {
@@ -161,10 +168,13 @@ const App: React.FC = () => {
       const categoriesResponse = await window.gapi.client.drive.files.list({
         q: `'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
         fields: 'files(id, name)',
-        orderBy: 'name', // Ensure consistent category order
+        orderBy: 'name',
       });
 
       const categoryFolders = categoriesResponse.result.files || [];
+      
+      // Defensive client-side sort to guarantee order.
+      categoryFolders.sort((a, b) => a.name.localeCompare(b.name));
 
       const updatedCategories = await Promise.all(
         categoryFolders.map(async (categoryFolder) => {
@@ -286,11 +296,19 @@ const handleExportData = async () => {
   const updateAuthStatus = useCallback((signedIn: boolean) => {
     setIsSignedIn(signedIn);
     if (signedIn) {
+      localStorage.setItem('isAdminLoggedIn', 'true');
       loadImagesFromDrive();
     } else {
+      localStorage.removeItem('isAdminLoggedIn');
       setCategories([]);
     }
   }, [loadImagesFromDrive]);
+  
+  const handleAuthClick = useCallback(() => {
+    if (window.tokenClient) {
+      window.tokenClient.requestAccessToken({});
+    }
+  }, []);
 
   useEffect(() => {
     const initGoogleClient = async () => {
@@ -309,27 +327,28 @@ const handleExportData = async () => {
           apiKey: apiConfig!.apiKey,
           discoveryDocs: DISCOVERY_DOCS,
         });
+
+        if (localStorage.getItem('isAdminLoggedIn') === 'true') {
+          handleAuthClick();
+        }
+
       } catch (error) {
         console.error("Error setting up Google services:", error);
         alert("Ocurrió un error al configurar los servicios de Google. Revisa tu Client ID o API Key.");
       } finally {
         setIsInitializing(false);
-        setIsLoading(false);
-        setLoadingMessage('');
+        if(!isSignedIn) {
+          setIsLoading(false);
+          setLoadingMessage('');
+        }
       }
     };
     
     if (isEditMode && gapiReady && gisReady && apiConfig) {
       initGoogleClient();
     }
-  }, [isEditMode, gapiReady, gisReady, apiConfig, updateAuthStatus]);
+  }, [isEditMode, gapiReady, gisReady, apiConfig, updateAuthStatus, handleAuthClick, isSignedIn]);
   
-
-  const handleAuthClick = () => {
-    if (window.tokenClient) {
-      window.tokenClient.requestAccessToken({});
-    }
-  };
 
   const showImagePicker = async (categoryId: string) => {
     if (!apiConfig || isInitializing || !isSignedIn || !window.google?.picker) return;
@@ -428,10 +447,29 @@ const handleExportData = async () => {
     setEditingImage(null);
   };
   
+  const handleEnterEditMode = () => {
+    localStorage.setItem('editMode', 'true');
+    setIsEditMode(true);
+    setCategories([]);
+    setIsLoading(true);
+    setLoadingMessage('Cambiando a modo administrador...');
+  };
+  
+  const handleExitEditMode = () => {
+    localStorage.removeItem('editMode');
+    localStorage.removeItem('isAdminLoggedIn');
+    if (window.gapi && window.gapi.client) {
+        window.gapi.client.setToken(null);
+    }
+    setIsSignedIn(false);
+    setIsEditMode(false);
+    window.location.reload();
+  };
+
   const AdminControls = () => (
     <div className="fixed bottom-4 right-4 z-40 bg-gray-800 border border-gray-700 rounded-lg shadow-lg p-2 flex flex-col sm:flex-row items-center gap-3">
         <p className="text-sm text-purple-300 hidden sm:block">Modo Administrador</p>
-        <button onClick={() => window.location.reload()} className="flex items-center gap-2 text-sm bg-gray-600 hover:bg-gray-500 text-white font-semibold py-2 px-3 rounded-md transition-colors">
+        <button onClick={handleExitEditMode} className="flex items-center gap-2 text-sm bg-gray-600 hover:bg-gray-500 text-white font-semibold py-2 px-3 rounded-md transition-colors">
             <EyeIcon /> Ver Modo Público
         </button>
         <button onClick={handleExportData} className="flex items-center gap-2 text-sm bg-purple-600 hover:bg-purple-500 text-white font-semibold py-2 px-3 rounded-md transition-colors">
@@ -520,7 +558,7 @@ const handleExportData = async () => {
           </p>
           {!isEditMode && (
             <button 
-                onClick={() => { setIsEditMode(true); setCategories([]); setIsLoading(true); setLoadingMessage('Cambiando a modo administrador...'); }}
+                onClick={handleEnterEditMode}
                 className="absolute top-0 right-0 mt-2 mr-2 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-lg text-sm flex items-center gap-2"
                 title="Administrar Contenido"
             >
