@@ -7,26 +7,19 @@
     <title>Catálogo Calligraffiti Larsek</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-      /* Custom scrollbar for webkit browsers */
+      /* Hide scrollbar across browsers */
+      .custom-scrollbar {
+        -ms-overflow-style: none; /* IE and Edge */
+        scrollbar-width: none; /* Firefox */
+      }
       .custom-scrollbar::-webkit-scrollbar {
-        height: 8px;
-      }
-      .custom-scrollbar::-webkit-scrollbar-track {
-        background: #1f2937; /* bg-gray-800 */
-        border-radius: 10px;
-      }
-      .custom-scrollbar::-webkit-scrollbar-thumb {
-        background: #4b5563; /* bg-gray-600 */
-        border-radius: 10px;
-      }
-      .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-        background: #6b7280; /* bg-gray-500 */
+        display: none; /* Webkit browsers */
       }
       .perspective-scroll {
         perspective: 1000px;
       }
       .gallery-image-item {
-        transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.4s, box-shadow 0.4s;
         transform-style: preserve-3d;
       }
     </style>

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react';
 import { Category, Image } from '../types';
 import { UploadIcon, TrashIcon, EditIcon } from './icons';
 
@@ -13,50 +13,159 @@ interface ImageGalleryProps {
 
 const ImageGallery: React.FC<ImageGalleryProps> = ({ category, onAddImages, onImageClick, onDeleteImage, onEditImage, isEditMode }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isJumpingRef = useRef(false);
+  const scrollTimeoutRef = useRef<number | null>(null);
 
-  const handleScroll = useCallback(() => {
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  const IS_INFINITE = category.images.length > 4;
+  const CLONE_COUNT = IS_INFINITE ? Math.min(3, category.images.length) : 0;
+
+  const extendedImages = useMemo(() => {
+    if (!IS_INFINITE) return category.images;
+    return [
+      ...category.images.slice(-CLONE_COUNT),
+      ...category.images,
+      ...category.images.slice(0, CLONE_COUNT),
+    ];
+  }, [category.images, IS_INFINITE, CLONE_COUNT]);
+
+  const getItems = useCallback(() => {
+    return Array.from(scrollContainerRef.current?.children || []).filter(el => el.classList.contains('gallery-image-item'));
+  }, []);
+  
+  const handleScrollEffects = useCallback(() => {
     const container = scrollContainerRef.current;
-    if (!container) return;
+    if (!container || !IS_INFINITE) return;
 
-    const images = container.querySelectorAll('.gallery-image-item');
+    const items = getItems();
+    if (items.length === 0) return;
+    
     const containerWidth = container.offsetWidth;
     const scrollCenter = container.scrollLeft + containerWidth / 2;
 
-    images.forEach(imageEl => {
-      const el = imageEl as HTMLDivElement;
+    let closestIndex = -1;
+    let minDistance = Infinity;
+
+    items.forEach((itemEl, index) => {
+      const el = itemEl as HTMLDivElement;
       const imageCenter = el.offsetLeft + el.offsetWidth / 2;
       const distanceFromCenter = imageCenter - scrollCenter;
       
-      const scale = Math.max(0.8, 1 - Math.abs(distanceFromCenter) / (containerWidth * 1.5));
-      const rotationY = (distanceFromCenter / (containerWidth / 2)) * -10;
-      const zIndex = Math.round(100 - Math.abs(distanceFromCenter / 10));
+      const absDistance = Math.abs(distanceFromCenter);
+      
+      if (absDistance < minDistance) {
+        minDistance = absDistance;
+        closestIndex = index;
+      }
+      
+      const scale = Math.max(0.85, 1 - absDistance / (containerWidth * 1.5));
+      const rotationY = (distanceFromCenter / (containerWidth / 2)) * -15;
+      const zIndex = Math.round(100 - absDistance / 10);
+      const opacity = Math.max(0.4, 1 - absDistance / containerWidth);
 
       el.style.transform = `rotateY(${rotationY}deg) scale(${scale})`;
       el.style.zIndex = String(zIndex);
-      el.style.opacity = `${Math.max(0.4, 1 - Math.abs(distanceFromCenter) / containerWidth)}`;
+      el.style.opacity = `${opacity}`;
+      el.style.boxShadow = '0 5px 15px rgba(0,0,0,0.5)';
     });
-  }, []);
+    
+    if (closestIndex !== -1) {
+      const centeredEl = items[closestIndex] as HTMLDivElement;
+      centeredEl.style.transform = `rotateY(0deg) scale(1.05)`;
+      centeredEl.style.boxShadow = `0 10px 30px -5px rgba(0,0,0,0.7)`;
+      centeredEl.style.zIndex = `101`;
+      centeredEl.style.opacity = `1`;
+      
+      const realIndex = (closestIndex - CLONE_COUNT + category.images.length) % category.images.length;
+      setActiveIndex(realIndex);
+    }
+
+  }, [getItems, IS_INFINITE, CLONE_COUNT, category.images.length]);
+
+  const handleInfiniteJump = useCallback(() => {
+    if (!IS_INFINITE || isJumpingRef.current) return;
+
+    const container = scrollContainerRef.current;
+    const items = getItems();
+    if (!container || items.length < 2) return;
+    
+    const { offsetWidth: itemWidth } = items[0] as HTMLElement;
+    const gap = (items[1] as HTMLElement).offsetLeft - ((items[0] as HTMLElement).offsetLeft + itemWidth);
+    const totalItemWidth = itemWidth + gap;
+    
+    // Jump from prefix clones to real items
+    if (container.scrollLeft < totalItemWidth * (CLONE_COUNT - 0.5)) {
+        isJumpingRef.current = true;
+        container.style.scrollBehavior = 'auto';
+        container.scrollLeft += category.images.length * totalItemWidth;
+        // Force style recalculation before re-enabling smooth scroll
+        container.getBoundingClientRect();
+        container.style.scrollBehavior = 'smooth';
+        setTimeout(() => { isJumpingRef.current = false; }, 50);
+    } 
+    // Jump from suffix clones to real items
+    else if (container.scrollLeft > totalItemWidth * (category.images.length + CLONE_COUNT - 1.5)) {
+        isJumpingRef.current = true;
+        container.style.scrollBehavior = 'auto';
+        container.scrollLeft -= category.images.length * totalItemWidth;
+        container.getBoundingClientRect();
+        container.style.scrollBehavior = 'smooth';
+        setTimeout(() => { isJumpingRef.current = false; }, 50);
+    }
+  }, [IS_INFINITE, CLONE_COUNT, category.images.length, getItems]);
+
+  const onScroll = useCallback(() => {
+    if (isJumpingRef.current) return;
+    handleScrollEffects();
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    scrollTimeoutRef.current = window.setTimeout(handleInfiniteJump, 150);
+  }, [handleScrollEffects, handleInfiniteJump]);
+  
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    
+    if (IS_INFINITE) {
+        const items = getItems();
+        if(items.length > CLONE_COUNT) {
+          const firstRealImage = items[CLONE_COUNT] as HTMLElement;
+          const newScrollLeft = firstRealImage.offsetLeft - (container.offsetWidth - firstRealImage.offsetWidth) / 2;
+          container.scrollLeft = newScrollLeft;
+        }
+    }
+    handleScrollEffects();
+  }, [IS_INFINITE, CLONE_COUNT, getItems, extendedImages.length, handleScrollEffects]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;
-    if (container) {
-      container.addEventListener('scroll', handleScroll, { passive: true });
-      handleScroll(); 
-    }
+    container?.addEventListener('scroll', onScroll, { passive: true });
     return () => {
-      if (container) {
-        container.removeEventListener('scroll', handleScroll);
-      }
+      container?.removeEventListener('scroll', onScroll);
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
     };
-  }, [handleScroll, category.images]);
-  
+  }, [onScroll]);
+
   const handleActionClick = (e: React.MouseEvent, action: () => void) => {
     e.stopPropagation();
     action();
   };
+  
+  const handleDotClick = (index: number) => {
+    const container = scrollContainerRef.current;
+    const items = getItems();
+    if (!container || items.length === 0) return;
+    
+    const targetIndex = IS_INFINITE ? index + CLONE_COUNT : index;
+    const targetElement = items[targetIndex] as HTMLElement;
+    if(targetElement) {
+        const newScrollLeft = targetElement.offsetLeft - (container.offsetWidth - targetElement.offsetWidth) / 2;
+        container.scrollTo({ left: newScrollLeft, behavior: 'smooth' });
+    }
+  };
 
   return (
-    <section aria-labelledby={`gallery-title-${category.id}`} className="mb-10">
+    <section aria-labelledby={`gallery-title-${category.id}`} className="mb-10 w-full">
       <div className="relative text-center mb-2">
         <h2 id={`gallery-title-${category.id}`} className="text-3xl font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 bg-clip-text text-transparent tracking-wide inline-block">
           {category.title}
@@ -71,10 +180,14 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ category, onAddImages, onIm
           </button>
         )}
       </div>
-      <div ref={scrollContainerRef} className="flex overflow-x-auto space-x-2 py-4 custom-scrollbar perspective-scroll" style={{ scrollSnapType: 'x mandatory' }}>
-        {category.images.map((image) => (
+      <div 
+        ref={scrollContainerRef} 
+        className={`flex overflow-x-auto space-x-2 py-8 custom-scrollbar ${IS_INFINITE ? 'perspective-scroll' : ''} ${!IS_INFINITE ? 'justify-center' : ''}`}
+        style={{ scrollSnapType: 'x mandatory' }}
+      >
+        {extendedImages.map((image, index) => (
           <div 
-            key={image.id} 
+            key={`${image.id}-${index}`} 
             className="gallery-image-item relative flex-shrink-0 w-64 md:w-72 rounded-lg overflow-hidden shadow-lg shadow-black/50 cursor-pointer group" 
             style={{ scrollSnapAlign: 'center' }}
             onClick={() => onImageClick(image, category.images)}
@@ -112,9 +225,19 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ category, onAddImages, onIm
             )}
           </div>
         ))}
-        {/* Ghost element for better snapping at the end */}
-        <div className="flex-shrink-0 w-1" style={{ scrollSnapAlign: 'end' }}></div>
       </div>
+      {IS_INFINITE && (
+        <div className="flex justify-center items-center mt-2 space-x-3" aria-hidden="true">
+            {category.images.map((_, index) => (
+                <button
+                    key={index}
+                    onClick={() => handleDotClick(index)}
+                    className={`w-2.5 h-2.5 rounded-full transition-all duration-300 ${index === activeIndex ? 'bg-purple-400 scale-125' : 'bg-gray-600 hover:bg-gray-500'}`}
+                    aria-label={`Ir a la imagen ${index + 1}`}
+                />
+            ))}
+        </div>
+      )}
     </section>
   );
 };
