@@ -17,8 +17,17 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ category, onAddImages, onIm
   const scrollTimeoutRef = useRef<number | null>(null);
 
   const [activeIndex, setActiveIndex] = useState(0);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const checkIsMobile = () => setIsMobile(window.innerWidth < 768);
+    checkIsMobile();
+    window.addEventListener('resize', checkIsMobile);
+    return () => window.removeEventListener('resize', checkIsMobile);
+  }, []);
 
   const IS_INFINITE = category.images.length > 4;
+  const IS_PERSPECTIVE = IS_INFINITE && !isMobile;
   const CLONE_COUNT = IS_INFINITE ? Math.min(3, category.images.length) : 0;
 
   const extendedImages = useMemo(() => {
@@ -31,12 +40,28 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ category, onAddImages, onIm
   }, [category.images, IS_INFINITE, CLONE_COUNT]);
 
   const getItems = useCallback(() => {
-    return Array.from(scrollContainerRef.current?.children || []).filter(el => el.classList.contains('gallery-image-item'));
+    // FIX: The type of `el` was being inferred as `unknown`. Using a type predicate
+    // with `instanceof HTMLElement` ensures type safety before accessing `classList`.
+    return Array.from(scrollContainerRef.current?.children || []).filter(
+      (el): el is HTMLElement => el instanceof HTMLElement && el.classList.contains('gallery-image-item')
+    );
   }, []);
+
+  useEffect(() => {
+    if (!IS_PERSPECTIVE) {
+      getItems().forEach(item => {
+        const el = item as HTMLElement;
+        el.style.transform = '';
+        el.style.zIndex = '';
+        el.style.opacity = '';
+        el.style.boxShadow = '';
+      });
+    }
+  }, [IS_PERSPECTIVE, getItems, category.images]);
   
   const handleScrollEffects = useCallback(() => {
     const container = scrollContainerRef.current;
-    if (!container || !IS_INFINITE) return;
+    if (!container) return;
 
     const items = getItems();
     if (items.length === 0) return;
@@ -59,29 +84,33 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ category, onAddImages, onIm
         closestIndex = index;
       }
       
-      const scale = Math.max(0.85, 1 - absDistance / (containerWidth * 1.5));
-      const rotationY = (distanceFromCenter / (containerWidth / 2)) * -15;
-      const zIndex = Math.round(100 - absDistance / 10);
-      const opacity = Math.max(0.4, 1 - absDistance / containerWidth);
+      if (IS_PERSPECTIVE) {
+        const scale = Math.max(0.85, 1 - absDistance / (containerWidth * 1.5));
+        const rotationY = (distanceFromCenter / (containerWidth / 2)) * -15;
+        const zIndex = Math.round(100 - absDistance / 10);
+        const opacity = Math.max(0.4, 1 - absDistance / containerWidth);
 
-      el.style.transform = `rotateY(${rotationY}deg) scale(${scale})`;
-      el.style.zIndex = String(zIndex);
-      el.style.opacity = `${opacity}`;
-      el.style.boxShadow = '0 5px 15px rgba(0,0,0,0.5)';
+        el.style.transform = `rotateY(${rotationY}deg) scale(${scale})`;
+        el.style.zIndex = String(zIndex);
+        el.style.opacity = `${opacity}`;
+        el.style.boxShadow = '0 5px 15px rgba(0,0,0,0.5)';
+      }
     });
     
     if (closestIndex !== -1) {
-      const centeredEl = items[closestIndex] as HTMLDivElement;
-      centeredEl.style.transform = `rotateY(0deg) scale(1.05)`;
-      centeredEl.style.boxShadow = `0 10px 30px -5px rgba(0,0,0,0.7)`;
-      centeredEl.style.zIndex = `101`;
-      centeredEl.style.opacity = `1`;
+      if (IS_PERSPECTIVE) {
+        const centeredEl = items[closestIndex] as HTMLDivElement;
+        centeredEl.style.transform = `rotateY(0deg) scale(1.05)`;
+        centeredEl.style.boxShadow = `0 10px 30px -5px rgba(0,0,0,0.7)`;
+        centeredEl.style.zIndex = `101`;
+        centeredEl.style.opacity = `1`;
+      }
       
       const realIndex = (closestIndex - CLONE_COUNT + category.images.length) % category.images.length;
       setActiveIndex(realIndex);
     }
 
-  }, [getItems, IS_INFINITE, CLONE_COUNT, category.images.length]);
+  }, [getItems, IS_PERSPECTIVE, CLONE_COUNT, category.images.length]);
 
   const handleInfiniteJump = useCallback(() => {
     if (!IS_INFINITE || isJumpingRef.current) return;
@@ -165,8 +194,8 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ category, onAddImages, onIm
   };
 
   return (
-    <section aria-labelledby={`gallery-title-${category.id}`} className="mb-10 w-full">
-      <div className="relative text-center mb-2">
+    <section aria-labelledby={`gallery-title-${category.id}`} className="mb-8 w-full">
+      <div className="relative text-center mb-4">
         <h2 id={`gallery-title-${category.id}`} className="text-3xl font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 bg-clip-text text-transparent tracking-wide inline-block">
           {category.title}
         </h2>
@@ -182,7 +211,7 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ category, onAddImages, onIm
       </div>
       <div 
         ref={scrollContainerRef} 
-        className={`flex overflow-x-auto space-x-2 py-8 custom-scrollbar ${IS_INFINITE ? 'perspective-scroll' : ''} ${!IS_INFINITE ? 'justify-center' : ''}`}
+        className={`flex overflow-x-auto space-x-2 py-4 custom-scrollbar ${IS_PERSPECTIVE ? 'perspective-scroll' : ''} ${!IS_INFINITE ? 'justify-center' : ''}`}
         style={{ scrollSnapType: 'x mandatory' }}
       >
         {extendedImages.map((image, index) => (
