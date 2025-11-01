@@ -30,7 +30,7 @@ const App: React.FC = () => {
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState('Cargando catálogo...');
-  const [isEditMode, setIsEditMode] = useState(() => localStorage.getItem('editMode') === 'true');
+  const [isEditMode, setIsEditMode] = useState(() => new URLSearchParams(window.location.search).get('admin') === 'true');
 
   const [modalState, setModalState] = useState<{ image: Image; gallery: Image[] } | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState<{ categoryId: string; imageId: string; } | null>(null);
@@ -43,14 +43,14 @@ const App: React.FC = () => {
       setIsLoading(true);
       setLoadingMessage('Cargando catálogo...');
       try {
-        const response = await fetch('/public-portfolio-drive-data.json');
+        const response = await fetch('/portfolio.json');
         if (!response.ok) {
           throw new Error('Could not load portfolio data.');
         }
         const data: Category[] = await response.json();
         setCategories(data);
       } catch (error) {
-        console.warn("Could not load public-portfolio-drive-data.json.", error);
+        console.warn("Could not load portfolio.json.", error);
         setCategories([]);
       } finally {
         setIsLoading(false);
@@ -174,13 +174,13 @@ const handlePublishChanges = () => {
         const blob = new Blob([JSON.stringify(publicData, null, 2)], { type: 'application/json' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = 'public-portfolio-drive-data.json';
+        a.download = 'portfolio.json';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(a.href);
 
-        alert("¡Datos generados! Sube el archivo 'public-portfolio-drive-data.json' descargado a la carpeta 'public' de tu proyecto y despliega los cambios.");
+        alert("¡Datos generados! Sube el archivo 'portfolio.json' descargado a la carpeta 'public' de tu proyecto y despliega los cambios.");
 
     } catch (err: any) {
         console.error("Error durante la publicación:", err);
@@ -205,7 +205,9 @@ const handlePublishChanges = () => {
   
   const handleAuthClick = useCallback(() => {
     if (window.tokenClient) {
-      window.tokenClient.requestAccessToken({});
+        setLoadingMessage('Esperando autenticación de Google...');
+        setIsLoading(true);
+        window.tokenClient.requestAccessToken({});
     }
   }, []);
 
@@ -216,7 +218,14 @@ const handlePublishChanges = () => {
           client_id: apiConfig!.clientId,
           scope: SCOPES,
           callback: (tokenResponse: any) => {
-            if (tokenResponse.error) throw tokenResponse.error;
+            if (tokenResponse.error) {
+              console.warn("Auth failed:", tokenResponse.error);
+              setIsInitializing(false);
+              setIsLoading(false);
+              setLoadingMessage('');
+              updateAuthStatus(false);
+              return;
+            };
             window.gapi.client.setToken(tokenResponse);
             updateAuthStatus(true);
           },
@@ -227,26 +236,21 @@ const handlePublishChanges = () => {
           discoveryDocs: DISCOVERY_DOCS,
         });
 
-        if (localStorage.getItem('isAdminLoggedIn') === 'true') {
-          handleAuthClick();
-        }
+        handleAuthClick();
 
       } catch (error) {
         console.error("Error setting up Google services:", error);
         alert("Ocurrió un error al configurar los servicios de Google. Revisa tu Client ID o API Key.");
-      } finally {
         setIsInitializing(false);
-        if(!isSignedIn) {
-          setIsLoading(false);
-          setLoadingMessage('');
-        }
+        setIsLoading(false);
+        setLoadingMessage('');
       }
     };
     
     if (isEditMode && gapiReady && gisReady && apiConfig) {
       initGoogleClient();
     }
-  }, [isEditMode, gapiReady, gisReady, apiConfig, updateAuthStatus, handleAuthClick, isSignedIn]);
+  }, [isEditMode, gapiReady, gisReady, apiConfig, updateAuthStatus, handleAuthClick]);
   
 
   const showImagePicker = async (categoryId: string) => {
@@ -270,6 +274,7 @@ const handlePublishChanges = () => {
     localStorage.setItem('googleApiConfig', JSON.stringify(config));
     setApiConfig(config);
     setIsSettingsModalOpen(false);
+    // No need to reload, useEffect will pick up the new apiConfig
   };
 
   const handleImageClick = async (image: Image, gallery: Image[]) => {
@@ -325,22 +330,16 @@ const handlePublishChanges = () => {
   };
   
   const handleEnterEditMode = () => {
-    localStorage.setItem('editMode', 'true');
-    setIsEditMode(true);
-    setCategories([]);
-    setIsLoading(true);
-    setLoadingMessage('Cambiando a modo administrador...');
+    window.location.search = 'admin=true';
   };
   
   const handleExitEditMode = () => {
-    localStorage.removeItem('editMode');
     localStorage.removeItem('isAdminLoggedIn');
     if (window.gapi && window.gapi.client) {
         window.gapi.client.setToken(null);
     }
-    setIsSignedIn(false);
-    setIsEditMode(false);
-    window.location.reload();
+    // Navigate to the base URL without query params to exit admin mode
+    window.location.href = window.location.pathname;
   };
 
   const AdminControls = () => (
@@ -365,45 +364,43 @@ const handlePublishChanges = () => {
       );
     }
     
-    if (isEditMode) {
-       if (!apiConfig) {
-        return (
-          <div className="w-full max-w-md p-8 bg-gray-800/50 rounded-lg shadow-xl border border-gray-700 text-center">
-            <h2 className="text-2xl font-bold mb-4">Configuración Requerida</h2>
-            <p className="text-gray-400 mb-6 max-w-md text-center">Para administrar tu portafolio, conecta la app a Google Drive proveyendo tu API Key y Client ID.</p>
-            <button onClick={() => setIsSettingsModalOpen(true)} className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 mx-auto">
-              <SettingsIcon /> Configurar API
-            </button>
-          </div>
-        );
-      }
-
-      if (!isSignedIn) {
-        return (
-          <div className="w-full max-w-md p-8 bg-gray-800/50 rounded-lg shadow-xl border border-gray-700 text-center">
-            <h2 className="text-2xl font-bold mb-4">Modo Administrador</h2>
-            <p className="text-gray-400 mb-6">Conecta tu cuenta de Google Drive para gestionar las imágenes de tu portafolio.</p>
-            <button 
-              onClick={handleAuthClick}
-              disabled={isInitializing} 
-              className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 mx-auto disabled:bg-gray-500 disabled:cursor-wait"
-            >
-              <GoogleIcon /> Conectar con Google Drive
-            </button>
-            {isInitializing && <p className="mt-2 text-sm text-gray-400">Inicializando servicios de Google...</p>}
-          </div>
-        );
-      }
+    if (isEditMode && !apiConfig) {
+      return (
+        <div className="w-full max-w-md p-8 bg-gray-800/50 rounded-lg shadow-xl border border-gray-700 text-center">
+          <h2 className="text-2xl font-bold mb-4">Configuración Requerida</h2>
+          <p className="text-gray-400 mb-6 max-w-md text-center">Para administrar tu portafolio, conecta la app a Google Drive proveyendo tu API Key y Client ID.</p>
+          <button onClick={() => setIsSettingsModalOpen(true)} className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 mx-auto">
+            <SettingsIcon /> Configurar API
+          </button>
+        </div>
+      );
     }
     
     if (categories.length === 0) {
-        return (
-            <div className="text-center">
-                <h3 className="text-2xl font-bold text-gray-400">Catálogo Vacío</h3>
-                <p className="text-gray-500 mt-2">No se encontraron categorías o imágenes.</p>
-                {isEditMode && <p className="text-gray-500 mt-1">Asegúrate de que la carpeta "{ROOT_FOLDER_NAME}" en tu Google Drive tenga subcarpetas con imágenes.</p>}
-            </div>
-        );
+      if (isEditMode && !isSignedIn) {
+         if (!isInitializing && !isLoading) { // Show retry button only if auth was cancelled or failed
+            return (
+                <div className="w-full max-w-md p-8 bg-gray-800/50 rounded-lg shadow-xl border border-gray-700 text-center">
+                    <h2 className="text-2xl font-bold mb-4">Conexión a Google Drive</h2>
+                    <p className="text-gray-400 mb-6">Se necesita permiso para acceder a Google Drive. Si cerraste la ventana de autenticación, puedes reintentarlo.</p>
+                    <button 
+                        onClick={handleAuthClick}
+                        className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 mx-auto"
+                    >
+                        <GoogleIcon /> Reintentar Conexión
+                    </button>
+                </div>
+            );
+        }
+        return null; // Don't show anything while initializing
+      }
+      return (
+          <div className="text-center">
+              <h3 className="text-2xl font-bold text-gray-400">Catálogo Vacío</h3>
+              <p className="text-gray-500 mt-2">No se encontraron categorías o imágenes.</p>
+              {isEditMode && <p className="text-gray-500 mt-1">Asegúrate de que la carpeta "{ROOT_FOLDER_NAME}" en tu Google Drive tenga subcarpetas con imágenes.</p>}
+          </div>
+      );
     }
 
     return (
