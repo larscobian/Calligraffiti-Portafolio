@@ -1,6 +1,3 @@
-
-
-
 import React, { useState, useEffect, useCallback } from 'react';
 import ImageGallery from './components/ImageGallery';
 import Modal from './components/Modal';
@@ -16,12 +13,11 @@ declare global {
     gapi: any;
     google: any;
     tokenClient: any;
-    JSZip: any;
   }
 }
 
 const DISCOVERY_DOCS = ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"];
-const SCOPES = "https://www.googleapis.com/auth/drive";
+const SCOPES = "https://www.googleapis.com/auth/drive.readonly";
 const ROOT_FOLDER_NAME = "Calligraffiti Portafolio";
 
 const sortCategories = (categories: Category[]): Category[] => {
@@ -40,17 +36,6 @@ const sortCategories = (categories: Category[]): Category[] => {
     }
     return a.title.localeCompare(b.title); // Neither is in list, sort alphabetically
   });
-};
-
-const slugify = (text: string) => {
-  return text
-    .toString()
-    .toLowerCase()
-    .replace(/\s+/g, '-')           // Replace spaces with -
-    .replace(/[^\w\-]+/g, '')       // Remove all non-word chars
-    .replace(/\-\-+/g, '-')         // Replace multiple - with single -
-    .replace(/^-+/, '')             // Trim - from start of text
-    .replace(/-+$/, '');            // Trim - from end of text
 };
 
 
@@ -140,7 +125,7 @@ const App: React.FC = () => {
       });
 
       if (!folderRes.result.files || folderRes.result.files.length === 0) {
-        throw new Error(`No se encontró la carpeta raíz "${ROOT_FOLDER_NAME}". Asegúrate de que exista.`);
+        throw new Error(`No se encontró la carpeta raíz "${ROOT_FOLDER_NAME}". Asegúrate de que exista y sea pública.`);
       }
       const rootFolderId = folderRes.result.files[0].id;
 
@@ -157,12 +142,13 @@ const App: React.FC = () => {
           setLoadingMessage(`Cargando imágenes para ${categoryFolder.name}...`);
           const imagesRes = await window.gapi.client.drive.files.list({
             q: `'${categoryFolder.id}' in parents and mimeType contains 'image/' and trashed=false`,
-            fields: 'files(id, name, thumbnailLink)',
+            fields: 'files(id, name)',
           });
 
           const images: Image[] = (imagesRes.result.files || []).map(file => ({
             id: file.id,
-            src: file.thumbnailLink ? file.thumbnailLink.replace(/=s\d+/, '=s800') : '',
+            // Construct a permanent, high-quality public URL
+            src: `https://drive.google.com/uc?export=view&id=${file.id}`,
             alt: file.name,
             rotation: 0
           }));
@@ -175,7 +161,7 @@ const App: React.FC = () => {
     } catch (err: any) {
       console.error("Error loading from Drive:", err);
       const errorMessage = err.result?.error?.message || err.message || JSON.stringify(err);
-      alert(`Error al cargar desde Google Drive: ${errorMessage}`);
+      alert(`Error al cargar desde Google Drive: ${errorMessage}\n\nAsegúrate de que la carpeta "${ROOT_FOLDER_NAME}" y su contenido sean públicos ("Cualquier persona con el enlace").`);
     } finally {
       setIsLoading(false);
       setLoadingMessage('');
@@ -188,71 +174,30 @@ const handlePublishChanges = async () => {
         return;
     }
 
-    setLoadingMessage('Preparando archivos para publicar...');
+    setLoadingMessage('Generando archivo de portafolio...');
     setIsLoading(true);
     
     try {
-        const zip = new window.JSZip();
-        const imagesFolder = zip.folder("images");
-        const publicData: Category[] = [];
-        let imageCount = 0;
-        const totalImages = categories.reduce((acc, cat) => acc + cat.images.length, 0);
+        // Create a clean, sorted version of the data for publication.
+        const publicData = JSON.parse(JSON.stringify(categories));
+        const sortedPublicData = sortCategories(publicData);
 
-        for (const category of categories) {
-            const categorySlug = slugify(category.title);
-            const categoryFolder = imagesFolder.folder(categorySlug);
-            
-            const newImages: Image[] = [];
-
-            for (const image of category.images) {
-                imageCount++;
-                setLoadingMessage(`Descargando imagen ${imageCount} de ${totalImages}...`);
-                
-                try {
-                    const response = await fetch(image.src);
-                    if (!response.ok) throw new Error(`Failed to fetch ${image.src}`);
-                    const blob = await response.blob();
-                    
-                    // Sanitize filename
-                    const sanitizedFilename = image.alt.replace(/[^\w.\-]/g, '_');
-                    
-                    categoryFolder.file(sanitizedFilename, blob);
-                    
-                    const newImage: Image = {
-                        ...image,
-                        src: `images/${categorySlug}/${sanitizedFilename}`
-                    };
-                    newImages.push(newImage);
-                } catch (fetchError) {
-                    console.error(`Could not download image ${image.alt}:`, fetchError);
-                    // Optionally skip this image or add a placeholder
-                }
-            }
-
-            publicData.push({
-                ...category,
-                images: newImages,
-            });
-        }
-
-        setLoadingMessage('Generando archivo ZIP...');
-        zip.file("portfolio.json", JSON.stringify(publicData, null, 2));
-
-        const zipBlob = await zip.generateAsync({ type: "blob" });
+        const jsonString = JSON.stringify(sortedPublicData, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json' });
         
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(zipBlob);
-        a.download = 'portfolio.zip';
+        a.href = URL.createObjectURL(blob);
+        a.download = 'portfolio.json';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(a.href);
 
-        alert("¡Archivo 'portfolio.zip' generado!\n\nINSTRUCCIONES:\n1. Descomprime el archivo.\n2. Copia la carpeta 'images' y el archivo 'portfolio.json'.\n3. Pégalos en la carpeta 'public' de tu proyecto, reemplazando los existentes.\n4. Despliega (deploy) tu aplicación para ver los cambios.");
+        alert("¡Archivo 'portfolio.json' generado!\n\nINSTRUCCIONES:\n1. Copia el archivo descargado.\n2. Pégalo en la carpeta 'public' de tu proyecto, reemplazando el existente.\n3. Despliega (deploy) tu aplicación para ver los cambios.");
 
     } catch (err: any) {
         console.error("Error durante la publicación:", err);
-        alert(`Ocurrió un error: ${err.message}`);
+        alert(`Ocurrió un error al generar el archivo JSON: ${err.message}`);
     } finally {
         setIsLoading(false);
         setLoadingMessage('');
@@ -346,7 +291,6 @@ const handlePublishChanges = async () => {
   };
 
   const handleImageClick = async (image: Image, gallery: Image[]) => {
-    // In both modes, we use the thumbnail link which is already high-res enough for the modal
     setModalState({ image, gallery });
   };
   
@@ -466,7 +410,7 @@ const handlePublishChanges = async () => {
           <div className="text-center">
               <h3 className="text-2xl font-bold text-gray-400">Catálogo Vacío</h3>
               <p className="text-gray-500 mt-2">No se encontraron categorías o imágenes.</p>
-              {isEditMode && <p className="text-gray-500 mt-1">Asegúrate de que la carpeta "{ROOT_FOLDER_NAME}" en tu Google Drive tenga subcarpetas con imágenes.</p>}
+              {isEditMode && <p className="text-gray-500 mt-1">Asegúrate de que la carpeta "{ROOT_FOLDER_NAME}" en tu Google Drive tenga subcarpetas con imágenes y sea pública.</p>}
           </div>
       );
     }
