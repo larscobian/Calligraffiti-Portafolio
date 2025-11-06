@@ -327,10 +327,11 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ category, onAddImages, onIm
 
   return (
     <section aria-labelledby={`gallery-title-${category.id}`} className="w-full py-4">
-      <div className="relative text-center">
+      <div className="relative text-center mb-2"> {/* Added mb-2 to maintain spacing */}
         <h2 id={`gallery-title-${category.id}`} className="text-2xl font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 bg-clip-text text-transparent tracking-wide inline-block">
           {category.title}
         </h2>
+        <span className="text-xs text-gray-400 ml-2">ver todo</span>
         {isEditMode && (
           <button
             onClick={onAddImages}
@@ -416,6 +417,21 @@ const ImageGallery: React.FC<ImageGalleryProps> = ({ category, onAddImages, onIm
             <button
               onClick={handleNextClick}
               className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-[102] p-2 text-white bg-black bg-opacity-20 rounded-full hover:bg-opacity-50 transition-all focus:outline-none focus:ring-2 focus:ring-purple-400 opacity-0 group-hover:opacity-100 hidden md:flex"
+              aria-label="Siguiente imagen"
+            >
+              <ChevronRightIcon />
+            </button>
+            {/* Mobile Navigation Buttons - Always visible on mobile */}
+            <button
+              onClick={handlePrevClick}
+              className="absolute left-2 top-1/2 -translate-y-1/2 z-[102] p-2 text-white bg-transparent rounded-full hover:bg-opacity-20 transition-all focus:outline-none focus:ring-2 focus:ring-purple-400 md:hidden opacity-70 hover:opacity-100"
+              aria-label="Imagen anterior"
+            >
+              <ChevronLeftIcon />
+            </button>
+            <button
+              onClick={handleNextClick}
+              className="absolute right-2 top-1/2 -translate-y-1/2 z-[102] p-2 text-white bg-transparent rounded-full hover:bg-opacity-20 transition-all focus:outline-none focus:ring-2 focus:ring-purple-400 md:hidden opacity-70 hover:opacity-100"
               aria-label="Siguiente imagen"
             >
               <ChevronRightIcon />
