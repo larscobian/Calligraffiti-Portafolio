@@ -1,334 +1,215 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ImageGallery from './components/ImageGallery';
 import Modal from './components/Modal';
-import ConfirmationModal from './components/ConfirmationModal';
-import EditModal from './components/EditModal';
-import ApiSettingsModal from './components/ApiSettingsModal';
-import { SettingsIcon, GoogleIcon, EyeIcon, DownloadIcon } from './components/icons';
+import { SettingsIcon, EyeIcon, DownloadIcon } from './components/icons';
 import { Category, Image } from './types';
 import { CATEGORY_ORDER } from './constants';
 
-declare global {
-  interface Window {
-    gapi: any;
-    google: any;
-    tokenClient: any;
-    JSZip: any;
-  }
+// For File System Access API
+interface FileSystemFileHandle {
+  kind: 'file';
+  name: string;
+}
+interface FileSystemDirectoryHandle {
+  kind: 'directory';
+  name: string;
+  values(): AsyncIterable<FileSystemFileHandle | FileSystemDirectoryHandle>;
 }
 
-const DISCOVERY_DOCS = ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"];
-const SCOPES = "https://www.googleapis.com/auth/drive.readonly";
-const ROOT_FOLDER_NAME = "Calligraffiti Portafolio";
+declare global {
+  interface Window {
+    showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
+  }
+}
 
 const sortCategories = (categories: Category[]): Category[] => {
   return [...categories].sort((a, b) => {
     const indexA = CATEGORY_ORDER.indexOf(a.title);
     const indexB = CATEGORY_ORDER.indexOf(b.title);
 
-    if (indexA !== -1 && indexB !== -1) {
-      return indexA - indexB; // Both in order list, sort by index
-    }
-    if (indexA !== -1) {
-      return -1; // A is in list, B is not. A comes first.
-    }
-    if (indexB !== -1) {
-      return 1; // B is in list, A is not. B comes first.
-    }
-    return a.title.localeCompare(b.title); // Neither is in list, sort alphabetically
+    if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+    if (indexA !== -1) return -1;
+    if (indexB !== -1) return 1;
+    return a.title.localeCompare(b.title);
   });
 };
 
+const sanitizeForUrl = (name: string) => {
+  const withoutExt = name.split('.').slice(0, -1).join('.');
+  const extension = name.split('.').pop() || '';
+  const sanitized = withoutExt.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+  return extension ? `${sanitized}.${extension}` : sanitized;
+};
 
-const App: React.FC = () => {
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [apiConfig, setApiConfig] = useState<{apiKey: string, clientId: string} | null>(null);
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  
-  const [gapiReady, setGapiReady] = useState(false);
-  const [gisReady, setGisReady] = useState(false);
-  const [isInitializing, setIsInitializing] = useState(true);
-  const [isSignedIn, setIsSignedIn] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadingMessage, setLoadingMessage] = useState('Cargando catálogo...');
-  const [isEditMode, setIsEditMode] = useState(() => new URLSearchParams(window.location.search).get('admin') === 'true');
 
-  const [modalState, setModalState] = useState<{ image: Image; gallery: Image[] } | null>(null);
-  const [deleteConfirmation, setDeleteConfirmation] = useState<{ categoryId: string; imageId: string; } | null>(null);
-  const [editingImage, setEditingImage] = useState<{category: Category, image: Image} | null>(null);
-  
-  useEffect(() => {
-    if (isEditMode) return;
-    
-    const loadStaticData = async () => {
+const AdminPanel: React.FC = () => {
+    const [foundData, setFoundData] = useState<Category[] | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [loadingMessage, setLoadingMessage] = useState('');
+
+    const handleSelectFolder = async () => {
+      if (!window.showDirectoryPicker) {
+        alert('Tu navegador no es compatible con esta función. Por favor, usa una versión reciente de Chrome, Edge u Opera.');
+        return;
+      }
+      
       setIsLoading(true);
-      setLoadingMessage('Cargando catálogo...');
+      setLoadingMessage('Procesando carpetas...');
+      setFoundData(null);
+
       try {
-        const response = await fetch('/portfolio.json');
-        if (!response.ok) {
-          throw new Error('Could not load portfolio data.');
+        const rootHandle = await window.showDirectoryPicker();
+        const categories: Category[] = [];
+
+        for await (const entry of rootHandle.values()) {
+          if (entry.kind === 'directory') {
+            setLoadingMessage(`Leyendo categoría: ${entry.name}...`);
+            const categoryHandle = entry;
+            const cleanTitle = categoryHandle.name.replace(/^\d+\s*-\s*/, '');
+            const category: Category = {
+              id: sanitizeForUrl(cleanTitle),
+              title: cleanTitle,
+              images: [],
+            };
+
+            for await (const fileEntry of categoryHandle.values()) {
+                if (fileEntry.kind === 'file' && fileEntry.name.match(/\.(jpe?g|png|gif|webp)$/i)) {
+                    category.images.push({
+                        id: fileEntry.name,
+                        src: `/images/${categoryHandle.name}/${fileEntry.name}`,
+                        alt: fileEntry.name,
+                        rotation: 0,
+                    });
+                }
+            }
+            if (category.images.length > 0) {
+                 categories.push(category);
+            }
+          }
         }
-        const data: Category[] = await response.json();
-        setCategories(sortCategories(data));
-      } catch (error) {
-        console.warn("Could not load portfolio.json.", error);
-        setCategories([]);
+        setFoundData(sortCategories(categories));
+      } catch (error: any) {
+        // Handle user cancellation gracefully
+        if (error.name !== 'AbortError') {
+            console.error('Error al procesar el directorio:', error);
+            alert(`Ocurrió un error: ${error.message}`);
+        }
       } finally {
         setIsLoading(false);
         setLoadingMessage('');
       }
     };
-    loadStaticData();
-  }, [isEditMode]);
-
-
-  useEffect(() => {
-    if (!isEditMode) {
-      setIsInitializing(false);
-      return;
-    };
     
-    const savedConfig = localStorage.getItem('googleApiConfig');
-    if (savedConfig) {
-      setApiConfig(JSON.parse(savedConfig));
-    } else {
-      setIsSettingsModalOpen(true);
-      setIsInitializing(false);
-      setIsLoading(false);
-      setLoadingMessage('');
-    }
-
-    const handleGapiLoad = () => window.gapi.load('client:picker', () => setGapiReady(true));
-    const handleGisLoad = () => setGisReady(true);
-
-    const gapiScript = document.querySelector('script[src="https://apis.google.com/js/api.js"]');
-    const gisScript = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
-
-    if (window.gapi && window.gapi.load) handleGapiLoad();
-    else gapiScript?.addEventListener('load', handleGapiLoad);
-
-    if (window.google && window.google.accounts) handleGisLoad();
-    else gisScript?.addEventListener('load', handleGisLoad);
-
-    return () => {
-        gapiScript?.removeEventListener('load', handleGapiLoad);
-        gisScript?.removeEventListener('load', handleGisLoad);
-    };
-  }, [isEditMode]);
-
-  const loadImagesFromDrive = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      setLoadingMessage(`Buscando la carpeta raíz "${ROOT_FOLDER_NAME}"...`);
-      const folderRes = await window.gapi.client.drive.files.list({
-        q: `mimeType='application/vnd.google-apps.folder' and name='${ROOT_FOLDER_NAME}' and trashed=false`,
-        fields: 'files(id, name)',
-      });
-
-      if (!folderRes.result.files || folderRes.result.files.length === 0) {
-        throw new Error(`No se encontró la carpeta raíz "${ROOT_FOLDER_NAME}". Asegúrate de que exista y sea pública.`);
-      }
-      const rootFolderId = folderRes.result.files[0].id;
-
-      const categoriesResponse = await window.gapi.client.drive.files.list({
-        q: `'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-        fields: 'files(id, name)',
-        orderBy: 'name',
-      });
-
-      const categoryFolders = categoriesResponse.result.files || [];
-
-      const updatedCategories = await Promise.all(
-        categoryFolders.map(async (categoryFolder) => {
-          setLoadingMessage(`Cargando imágenes para ${categoryFolder.name}...`);
-          const imagesRes = await window.gapi.client.drive.files.list({
-            q: `'${categoryFolder.id}' in parents and mimeType contains 'image/' and trashed=false`,
-            fields: 'files(id, name)',
-          });
-
-          const images: Image[] = (imagesRes.result.files || []).map(file => ({
-            id: file.id,
-            // This is a permanent, direct-serving URL format for publicly shared files.
-            src: `https://drive.google.com/uc?id=${file.id}`,
-            alt: file.name,
-            rotation: 0
-          }));
-          
-          const cleanTitle = categoryFolder.name.replace(/^\d+\s*-\s*/, '');
-          return { id: categoryFolder.id, title: cleanTitle, images };
-        })
-      );
-      setCategories(sortCategories(updatedCategories));
-    } catch (err: any) {
-      console.error("Error loading from Drive:", err);
-      const errorMessage = err.result?.error?.message || err.message || JSON.stringify(err);
-      alert(`Error al cargar desde Google Drive: ${errorMessage}\n\nAsegúrate de que la carpeta "${ROOT_FOLDER_NAME}" y su contenido sean públicos ("Cualquier persona con el enlace").`);
-    } finally {
-      setIsLoading(false);
-      setLoadingMessage('');
-    }
-  }, []);
-  
-const handlePublishChanges = async () => {
-    if (categories.length === 0) {
-        alert("No hay nada que publicar. El portafolio está vacío.");
-        return;
-    }
-    if (!window.JSZip) {
-        alert("La librería de compresión (JSZip) no está disponible. No se puede continuar.");
-        return;
-    }
-
-    setIsLoading(true);
-    const zip = new window.JSZip();
-    const publicFolder = zip.folder('public');
-    const imagesFolder = publicFolder.folder('images');
-    
-    // Create a clean, sorted version of the data for publication.
-    const publicData = JSON.parse(JSON.stringify(categories));
-    const sortedPublicData = sortCategories(publicData);
-    
-    const sanitizeFilename = (name: string) => name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
-    
-    try {
-        for (const category of sortedPublicData) {
-            const categoryFolderName = sanitizeFilename(category.title);
-            const categoryZipFolder = imagesFolder.folder(categoryFolderName);
-            
-            setLoadingMessage(`Procesando categoría: ${category.title}...`);
-            
-            for (const image of category.images) {
-                 try {
-                    setLoadingMessage(`Descargando: ${image.alt}...`);
-                    const res = await window.gapi.client.drive.files.get({
-                        fileId: image.id,
-                        alt: 'media'
-                    });
-                    
-                    const cleanImageName = sanitizeFilename(image.alt.split('.').slice(0, -1).join('.') || image.id) + `.${image.alt.split('.').pop() || 'jpg'}`;
-                    const imagePath = `/images/${categoryFolderName}/${cleanImageName}`;
-                    
-                    categoryZipFolder.file(cleanImageName, res.body, { binary: true });
-                    image.src = imagePath; // Update src to the new local path
-
-                } catch (downloadError) {
-                    console.error(`Failed to download image ${image.alt} (${image.id}):`, downloadError);
-                    alert(`Error al descargar la imagen "${image.alt}". ¿Quizás no es pública? Se omitirá del archivo final.`);
-                }
-            }
-        }
-
-        setLoadingMessage('Generando archivo de portafolio...');
-        const jsonString = JSON.stringify(sortedPublicData, null, 2);
-        publicFolder.file('portfolio.json', jsonString);
-        
-        setLoadingMessage('Comprimiendo archivos...');
-        const content = await zip.generateAsync({ type: 'blob' });
-        
+    const handleDownloadJson = () => {
+        if (!foundData) return;
+        const jsonString = JSON.stringify(foundData, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(content);
-        a.download = 'portfolio.zip';
+        a.href = url;
+        a.download = 'portfolio.json';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(a.href);
+        URL.revokeObjectURL(url);
+    };
 
-        alert("¡Archivo 'portfolio.zip' generado!\n\nINSTRUCCIONES:\n1. Descomprime el archivo descargado.\n2. Verás una carpeta 'public' dentro.\n3. Arrastra y reemplaza la carpeta 'public' de tu proyecto con esta nueva carpeta.\n4. Despliega (deploy) tu aplicación para ver los cambios.");
+    return (
+        <div className="w-full max-w-2xl p-8 bg-gray-800/50 rounded-lg shadow-xl border border-gray-700 text-center">
+            <h2 className="text-2xl font-bold mb-4 text-purple-300">Generador de Portafolio Local</h2>
+            <p className="text-gray-400 mb-6 max-w-md mx-auto">Esta herramienta te ayuda a crear el archivo `portfolio.json` basado en tu estructura de carpetas local.</p>
+            
+            <div className="text-left bg-gray-900/50 p-4 rounded-md border border-gray-600 mb-6">
+                <h3 className="font-semibold text-lg mb-2">Instrucciones:</h3>
+                <ol className="list-decimal list-inside text-gray-300 space-y-2 text-sm">
+                    <li>Organiza tus imágenes en carpetas locales. Cada carpeta será una categoría en el catálogo.</li>
+                    <li>Haz clic en el botón de abajo y selecciona la **carpeta principal** que contiene todas tus carpetas de categorías.</li>
+                    <li>La herramienta generará una vista previa y un botón para descargar el archivo `portfolio.json`.</li>
+                    <li>Coloca el `portfolio.json` descargado en la carpeta `public/` de tu proyecto.</li>
+                    <li>Copia tus carpetas de imágenes a una nueva carpeta `public/images/` en tu proyecto.</li>
+                    <li>¡Sube los cambios a GitHub para desplegar!</li>
+                </ol>
+            </div>
 
-    } catch (err: any) {
-        console.error("Error durante la publicación:", err);
-        alert(`Ocurrió un error al generar el archivo ZIP: ${err.message}`);
-    } finally {
-        setIsLoading(false);
-        setLoadingMessage('');
-    }
+            <button
+                onClick={handleSelectFolder}
+                className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-6 rounded-lg flex items-center gap-2 mx-auto text-lg transition-transform hover:scale-105"
+            >
+                Seleccionar Carpeta del Portafolio
+            </button>
+            
+            {isLoading && (
+                 <div className="mt-6">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-400 mx-auto"></div>
+                    <p className="mt-2 text-gray-300">{loadingMessage}</p>
+                </div>
+            )}
+            
+            {foundData && (
+                <div className="mt-8 text-left">
+                    <h3 className="font-semibold text-lg mb-2">Resultado del Escaneo:</h3>
+                    {foundData.length > 0 ? (
+                        <>
+                            <ul className="bg-gray-900/50 p-4 rounded-md border border-gray-600 max-h-48 overflow-y-auto">
+                                {foundData.map(cat => (
+                                    <li key={cat.id} className="text-sm">
+                                        <span className="font-bold text-purple-300">{cat.title}</span>
+                                        <span className="text-gray-400"> - {cat.images.length} imágenes encontradas</span>
+                                    </li>
+                                ))}
+                            </ul>
+                            <button
+                                onClick={handleDownloadJson}
+                                className="w-full mt-4 bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-6 rounded-lg flex items-center justify-center gap-2 text-lg transition-transform hover:scale-105"
+                            >
+                                <DownloadIcon /> Descargar portfolio.json
+                            </button>
+                        </>
+                    ) : (
+                        <p className="text-yellow-400 text-center">No se encontraron carpetas con imágenes válidas dentro del directorio seleccionado.</p>
+                    )}
+                </div>
+            )}
+
+        </div>
+    );
 };
 
-
-  const updateAuthStatus = useCallback((signedIn: boolean) => {
-    setIsSignedIn(signedIn);
-    if (signedIn) {
-      localStorage.setItem('isAdminLoggedIn', 'true');
-      loadImagesFromDrive();
-    } else {
-      localStorage.removeItem('isAdminLoggedIn');
-      setCategories([]);
-    }
-  }, [loadImagesFromDrive]);
+const App: React.FC = () => {
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadingMessage, setLoadingMessage] = useState('Cargando catálogo...');
+  const [isEditMode] = useState(() => new URLSearchParams(window.location.search).get('admin') === 'true');
+  const [modalState, setModalState] = useState<{ image: Image; gallery: Image[] } | null>(null);
   
-  const handleAuthClick = useCallback(() => {
-    if (window.tokenClient) {
-        setLoadingMessage('Esperando autenticación de Google...');
-        setIsLoading(true);
-        window.tokenClient.requestAccessToken({});
-    }
-  }, []);
-
   useEffect(() => {
-    const initGoogleClient = async () => {
-      try {
-        window.tokenClient = window.google.accounts.oauth2.initTokenClient({
-          client_id: apiConfig!.clientId,
-          scope: SCOPES,
-          callback: (tokenResponse: any) => {
-            if (tokenResponse.error) {
-              console.warn("Auth failed:", tokenResponse.error);
-              setIsInitializing(false);
-              setIsLoading(false);
-              setLoadingMessage('');
-              updateAuthStatus(false);
-              return;
-            };
-            window.gapi.client.setToken(tokenResponse);
-            updateAuthStatus(true);
-          },
-        });
-
-        await window.gapi.client.init({
-          apiKey: apiConfig!.apiKey,
-          discoveryDocs: DISCOVERY_DOCS,
-        });
-
-        handleAuthClick();
-
-      } catch (error) {
-        console.error("Error setting up Google services:", error);
-        alert("Ocurrió un error al configurar los servicios de Google. Revisa tu Client ID o API Key.");
-        setIsInitializing(false);
+    if (isEditMode) {
         setIsLoading(false);
         setLoadingMessage('');
-      }
+        return;
     };
     
-    if (isEditMode && gapiReady && gisReady && apiConfig) {
-      initGoogleClient();
-    }
-  }, [isEditMode, gapiReady, gisReady, apiConfig, updateAuthStatus, handleAuthClick]);
-  
-
-  const showImagePicker = async (categoryId: string) => {
-    if (!apiConfig || isInitializing || !isSignedIn || !window.google?.picker) return;
-    const picker = new window.google.picker.PickerBuilder()
-      .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED)
-      .setOAuthToken(window.gapi.client.token.access_token)
-      .addView(new window.google.picker.View(window.google.picker.ViewId.PHOTOS).setMimeTypes("image/jpeg,image/png,image/gif,image/webp"))
-      .addView(new window.google.picker.DocsUploadView().setParent(categoryId))
-      .setDeveloperKey(apiConfig.apiKey)
-      .setCallback((data: any) => {
-        if (data.action === window.google.picker.Action.PICKED || data.action === window.google.picker.Action.UPLOADED) {
-           loadImagesFromDrive(); 
+    const loadStaticData = async () => {
+      setIsLoading(true);
+      setLoadingMessage('Cargando catálogo...');
+      try {
+        // The portfolio.json must be in the public folder to be accessible like this.
+        const response = await fetch('/portfolio.json');
+        if (!response.ok) {
+          throw new Error('Could not load portfolio.json. Make sure the file exists in the /public folder.');
         }
-      })
-      .build();
-    picker.setVisible(true);
-  };
-  
-  const handleSaveApiConfig = (config: {apiKey: string, clientId: string}) => {
-    localStorage.setItem('googleApiConfig', JSON.stringify(config));
-    setApiConfig(config);
-    setIsSettingsModalOpen(false);
-    // No need to reload, useEffect will pick up the new apiConfig
-  };
+        const data: Category[] = await response.json();
+        setCategories(sortCategories(data));
+      } catch (error) {
+        console.error("Error loading portfolio.json:", error);
+        setCategories([]);
+        setLoadingMessage(`Error: No se pudo cargar el portafolio. Asegúrate de que el archivo 'portfolio.json' exista en la carpeta 'public'.`);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadStaticData();
+  }, [isEditMode]);
 
   const handleImageClick = async (image: Image, gallery: Image[]) => {
     setModalState({ image, gallery });
@@ -354,60 +235,16 @@ const handlePublishChanges = async () => {
     handleImageClick(gallery[prevIndex], gallery);
   };
   
-  const confirmDelete = async () => {
-    if (!deleteConfirmation) return;
-    try {
-      await window.gapi.client.drive.files.delete({ fileId: deleteConfirmation.imageId });
-      setCategories(prev => prev.map(cat => ({
-        ...cat,
-        images: cat.images.filter(img => img.id !== deleteConfirmation.imageId)
-      })));
-    } catch (err) {
-      console.error("Failed to delete file from Drive:", err);
-      alert("No se pudo eliminar la imagen de Google Drive.");
-    }
-    setDeleteConfirmation(null);
-  };
-  
-  const cancelDelete = () => setDeleteConfirmation(null);
-  const handleEditImage = (category: Category, image: Image) => setEditingImage({category, image});
-  const handleCloseEditModal = () => setEditingImage(null);
-  const handleSaveImageEdit = (updatedImage: Image) => {
-    if (!editingImage) return;
-    setCategories(prev => prev.map(cat => cat.id === editingImage.category.id ? {
-      ...cat,
-      images: cat.images.map(img => img.id === updatedImage.id ? updatedImage : img),
-    } : cat));
-    setEditingImage(null);
-  };
-  
   const handleEnterEditMode = () => {
     window.location.search = 'admin=true';
   };
   
   const handleExitEditMode = () => {
-    localStorage.removeItem('isAdminLoggedIn');
-    if (window.gapi && window.gapi.client) {
-        window.gapi.client.setToken(null);
-    }
-    // Navigate to the base URL without query params to exit admin mode
     window.location.href = window.location.pathname;
   };
-
-  const AdminControls = () => (
-    <div className="fixed bottom-4 right-4 z-40 bg-gray-800 border border-gray-700 rounded-lg shadow-lg p-2 flex flex-col sm:flex-row items-center gap-3">
-        <p className="text-sm text-purple-300 hidden sm:block">Modo Administrador</p>
-        <button onClick={handleExitEditMode} className="flex items-center gap-2 text-sm bg-gray-600 hover:bg-gray-500 text-white font-semibold py-2 px-3 rounded-md transition-colors">
-            <EyeIcon /> Ver Modo Público
-        </button>
-        <button onClick={handlePublishChanges} className="flex items-center gap-2 text-sm bg-purple-600 hover:bg-purple-500 text-white font-semibold py-2 px-3 rounded-md transition-colors">
-            <DownloadIcon /> Publicar Cambios
-        </button>
-    </div>
-  );
-
+  
   const renderContent = () => {
-    if (isLoading && !modalState) {
+    if (isLoading) {
       return (
         <div className="w-full max-w-md p-8 bg-gray-800/50 rounded-lg shadow-xl border border-gray-700 text-center">
             <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-purple-400 mx-auto"></div>
@@ -416,41 +253,15 @@ const handlePublishChanges = async () => {
       );
     }
     
-    if (isEditMode && !apiConfig) {
-      return (
-        <div className="w-full max-w-md p-8 bg-gray-800/50 rounded-lg shadow-xl border border-gray-700 text-center">
-          <h2 className="text-2xl font-bold mb-4">Configuración Requerida</h2>
-          <p className="text-gray-400 mb-6 max-w-md text-center">Para administrar tu portafolio, conecta la app a Google Drive proveyendo tu API Key y Client ID.</p>
-          <button onClick={() => setIsSettingsModalOpen(true)} className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 mx-auto">
-            <SettingsIcon /> Configurar API
-          </button>
-        </div>
-      );
+    if (isEditMode) {
+      return <AdminPanel />;
     }
     
     if (categories.length === 0) {
-      if (isEditMode && !isSignedIn) {
-         if (!isInitializing && !isLoading) { // Show retry button only if auth was cancelled or failed
-            return (
-                <div className="w-full max-w-md p-8 bg-gray-800/50 rounded-lg shadow-xl border border-gray-700 text-center">
-                    <h2 className="text-2xl font-bold mb-4">Conexión a Google Drive</h2>
-                    <p className="text-gray-400 mb-6">Se necesita permiso para acceder a Google Drive. Si cerraste la ventana de autenticación, puedes reintentarlo.</p>
-                    <button 
-                        onClick={handleAuthClick}
-                        className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 mx-auto"
-                    >
-                        <GoogleIcon /> Reintentar Conexión
-                    </button>
-                </div>
-            );
-        }
-        return null; // Don't show anything while initializing
-      }
       return (
           <div className="text-center">
               <h3 className="text-2xl font-bold text-gray-400">Catálogo Vacío</h3>
               <p className="text-gray-500 mt-2">No se encontraron categorías o imágenes.</p>
-              {isEditMode && <p className="text-gray-500 mt-1">Asegúrate de que la carpeta "{ROOT_FOLDER_NAME}" en tu Google Drive tenga subcarpetas con imágenes y sea pública.</p>}
           </div>
       );
     }
@@ -461,11 +272,12 @@ const handlePublishChanges = async () => {
             <ImageGallery
               key={category.id}
               category={category}
-              onAddImages={() => showImagePicker(category.id)}
               onImageClick={handleImageClick}
-              onDeleteImage={(catId, imgId) => setDeleteConfirmation({ categoryId: catId, imageId: imgId })}
-              onEditImage={handleEditImage}
-              isEditMode={isEditMode && isSignedIn}
+              // Admin-related props are no longer needed for public view
+              isEditMode={false}
+              onAddImages={() => {}}
+              onDeleteImage={() => {}}
+              onEditImage={() => {}}
             />
           ))}
         </div>
@@ -479,7 +291,15 @@ const handlePublishChanges = async () => {
           <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-fuchsia-500 to-violet-600 bg-clip-text text-transparent">
             Ideas Calligraffiti
           </h1>
-          {!isEditMode && (
+          { isEditMode ? (
+             <button 
+                onClick={handleExitEditMode}
+                className="absolute top-0 right-0 mt-2 mr-2 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-lg text-sm flex items-center gap-2"
+                title="Ver Modo Público"
+            >
+                <EyeIcon /> <span className="hidden md:inline">Ver Modo Público</span>
+            </button>
+          ) : (
             <button 
                 onClick={handleEnterEditMode}
                 className="absolute top-0 right-0 mt-2 mr-2 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-lg text-sm flex items-center gap-2"
@@ -494,38 +314,12 @@ const handlePublishChanges = async () => {
         {renderContent()}
       </main>
       
-      {isEditMode && isSignedIn && <AdminControls />}
-
-      <ApiSettingsModal
-        isOpen={isSettingsModalOpen}
-        onClose={() => setIsSettingsModalOpen(false)}
-        onSave={handleSaveApiConfig}
-      />
       {modalState && (
         <Modal
           image={modalState.image}
           onClose={handleCloseModal}
           onNext={handleNextImage}
           onPrev={handlePrevImage}
-        />
-      )}
-      {isLoading && modalState && (
-         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-             <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-purple-400"></div>
-         </div>
-      )}
-      <ConfirmationModal
-        isOpen={!!deleteConfirmation}
-        onClose={cancelDelete}
-        onConfirm={confirmDelete}
-        title="Confirmar Eliminación"
-        message="¿Estás seguro de que quieres eliminar esta imagen? Esta acción la eliminará permanentemente de tu Google Drive."
-      />
-      {editingImage && (
-        <EditModal
-          image={editingImage.image}
-          onClose={handleCloseEditModal}
-          onSave={handleSaveImageEdit}
         />
       )}
     </div>
